@@ -267,7 +267,13 @@ ORDER BY coowners DESC, g1.title, g2.title
 LIMIT 10;
 
 -- Q4: N друзей играют в Y, K из них — в жанрах из библиотеки X
-WITH friend_owned AS (
+WITH my_genres AS (
+    SELECT DISTINCT gg.genre_id
+    FROM ownerships o
+    JOIN game_genres gg ON gg.game_id = o.game_id
+    WHERE o.player_id = :player_id
+),
+friend_owned AS (
     SELECT DISTINCT fo.player_id AS friend_id, g.game_id, g.title
     FROM friendships f
     JOIN ownerships fo ON (
@@ -286,10 +292,8 @@ SELECT fo.game_id, fo.title,
            SELECT 1
            FROM ownerships o_sim
            JOIN game_genres gg_sim ON gg_sim.game_id = o_sim.game_id
-           JOIN ownerships o_mine ON o_mine.player_id = :player_id
-           JOIN game_genres gg_mine ON gg_mine.game_id = o_mine.game_id
            WHERE o_sim.player_id = fo.friend_id
-             AND gg_sim.genre_id = gg_mine.genre_id
+             AND gg_sim.genre_id IN (SELECT genre_id FROM my_genres)
        )) AS similar_friend_count
 FROM friend_owned fo
 GROUP BY fo.game_id, fo.title
@@ -445,7 +449,7 @@ LIMIT 10;
 | **Связь M:N**                     | Junction-таблицы `ownerships`, `game_genres`, `friendships` | Рёбра `:OWNS`, `:IN_GENRE`, `:FRIEND_OF` |
 | **Обход «игрок → друзья → игры»** | JOIN + NOT EXISTS                                           | Один MATCH-паттерн                       |
 | **Q3 (пары игр)**                 | Self-join `ownerships`                                      | Два `:OWNS` от одного `Player`           |
-| **Q4 (жанровая близость)**        | CTE + EXISTS по `game_genres`                               | OPTIONAL MATCH по `:IN_GENRE`            |
+| **Q4 (жанровая близость)**        | CTE `my_genres` + EXISTS по жанрам друга                  | OPTIONAL MATCH по `:IN_GENRE`            |
 | **Q5 (Jaccard)**                  | CTE + `FILTER` + `HAVING`                                   | `collect` + list comprehension           |
 | **Целостность**                   | FK, UNIQUE, CHECK                                           | Constraints на id                        |
 
@@ -481,13 +485,13 @@ LIMIT 10;
 Замеры: `python -u scripts/benchmark.py --scales all`.
 
 
-| Запрос | S PG | S Neo4j | M PG | M Neo4j | L PG   | L Neo4j | XL PG  | XL Neo4j |
-| ------ | ---- | ------- | ---- | ------- | ------ | ------- | ------ | -------- |
-| Q1     | 1.6  | 3.0     | 2.6  | 3.3     | 1.7    | 4.9     | 3.1    | 6.4      |
-| Q2     | 1.5  | 1.5     | 1.8  | 1.8     | 1.6    | 2.3     | 1.9    | 2.4      |
-| Q3     | 3.0  | 2.8     | 62.7 | 96.5    | 1311.7 | 2337.2  | 2173.9 | 7190.5   |
-| Q4     | 2.9  | 5.7     | 6.7  | 16.7    | 53.5   | 44.7    | 4.4    | 86.6     |
-| Q5     | 1.9  | 2.0     | 3.0  | 4.9     | 17.5   | 38.4    | 30.5   | 159.5    |
+| Запрос | S PG | S Neo4j | M PG | M Neo4j | L PG    | L Neo4j | XL PG   | XL Neo4j |
+| ------ | ---- | ------- | ---- | ------- | ------- | ------- | ------- | -------- |
+| Q1     | 2.3  | 2.1     | 2.7  | 3.3     | 1.7     | 4.0     | 2.3     | 4.4      |
+| Q2     | 1.4  | 1.5     | 1.6  | 1.9     | 1.5     | 1.8     | 1.9     | 2.0      |
+| Q3     | 3.0  | 2.8     | 52.9 | 49.7    | 1096.6  | 1812.8  | 1721.8  | 3261.0   |
+| Q4     | 2.7  | 5.4     | 4.9  | 15.3    | 11.3    | 39.6    | 38.0    | 77.6     |
+| Q5     | 1.6  | 2.1     | 2.8  | 4.9     | 14.4    | 34.6    | 25.4    | 69.5     |
 
 
 ### 4.5. Относительный рост времени (масштабируемость)
@@ -497,13 +501,13 @@ LIMIT 10;
 **S → XL** (ownerships ×210):
 
 
-| Запрос | PostgreSQL      | Neo4j            | Медленнее растёт |
-| ------ | --------------- | ---------------- | ---------------- |
-| Q1     | ×1.9 (+95%)     | ×2.2 (+115%)     | PostgreSQL       |
-| Q2     | ×1.3 (+26%)     | ×1.6 (+55%)      | PostgreSQL       |
-| Q3     | ×719            | ×2559            | PostgreSQL       |
-| **Q4** | **×1.5 (+48%)** | **×15 (+1410%)** | **PostgreSQL**   |
-| Q5     | ×16 (+1550%)    | ×81 (+7900%)     | PostgreSQL       |
+| Запрос | PostgreSQL   | Neo4j      | Медленнее растёт |
+| ------ | ------------ | ---------- | ---------------- |
+| Q1     | ×1.0 (+2%)   | ×2.1 (+113%) | PostgreSQL     |
+| Q2     | ×1.4 (+43%)  | ×1.4 (+37%)  | ≈ равны        |
+| Q3     | ×577         | ×1169      | PostgreSQL       |
+| Q4     | ×14 (+1290%) | ×14 (+1330%) | ≈ равны        |
+| Q5     | ×16 (+1540%) | ×33 (+3180%) | PostgreSQL       |
 
 
 **L → XL** (ownerships ×1.97) — при почти удвоении всей БД:
@@ -511,11 +515,11 @@ LIMIT 10;
 
 | Запрос | PostgreSQL | Neo4j | Стабильнее |
 | ------ | ---------- | ----- | ---------- |
-| Q1     | ×1.85      | ×1.32 | Neo4j      |
-| Q2     | ×1.21      | ×1.04 | Neo4j      |
-| Q3     | ×1.66      | ×3.08 | PostgreSQL |
-| Q4     | ×0.08      | ×1.94 | PostgreSQL |
-| Q5     | ×1.74      | ×4.15 | PostgreSQL |
+| Q1     | ×1.39      | ×1.09 | Neo4j      |
+| Q2     | ×1.32      | ×1.08 | Neo4j      |
+| Q3     | ×1.57      | ×1.80 | PostgreSQL |
+| Q4     | ×3.4       | ×2.0  | Neo4j      |
+| Q5     | ×1.76      | ×2.0  | PostgreSQL |
 
 
 **Абсолютное время на S** (Neo4j быстрее):
@@ -526,15 +530,17 @@ LIMIT 10;
 | Q3     | 3.0 ms     | **2.8 ms** |
 
 
-**Итог по масштабируемости:** PostgreSQL стабильно быстрее в абсолюте на **Q1, Q4, Q5** и лучше масштабируется на **Q4** (S→XL: ×1.5 vs ×15). Neo4j чуть быстрее на **Q3** при малых данных и **медленнее растёт** на **Q1, Q2** при переходе L→XL. **Q3** и **Q5** тяжёлые для обеих СУБД; на XL Neo4j особенно проигрывает на Q3 (self-join по всем `:OWNS`) и Q5 (полный перебор игроков с `collect`).
+**Замечание по Q4:** в SQL жанры библиотеки X предвычисляются в CTE `my_genres` (см. §2.3); без этого на масштабе L планировщик PostgreSQL выбирал Seq Scan по всей `ownerships`. С исправленным запросом время растёт монотонно: **L ≈ 11 ms → XL ≈ 38 ms** (PG).
+
+**Итог по масштабируемости:** **Q4** у обеих СУБД растёт схоже (S→XL ×14); PostgreSQL быстрее в абсолюте на L/XL. **Q3** и **Q5** тяжёлые для обеих; Neo4j на XL проигрывает на глобальных self-join (Q3) и переборе игроков (Q5). На **Q1, Q2** при L→XL Neo4j чуть стабильнее.
 
 ### 4.6. Выводы
 
 Обе реализации отвечают на все пять вопросов и дают **одинаковые** ответы на всех масштабах S–XL.
 
-PostgreSQL сильнее в **абсолютном времени** на локальных обходах с фильтрацией (Q1, Q4), на глобальных агрегатах (Q5) и на self-join (Q3 на L/XL). Neo4j выразительнее для паттернов «игрок → друзья → игры» в Cypher, но на наших объёмах это не всегда даёт выигрыш по времени; OPTIONAL MATCH в Q4 и полный scan в Q5 дороже, чем эквивалентные JOIN/CTE в SQL.
+PostgreSQL сильнее в **абсолютном времени** на локальных обходах (Q1, Q4 на L/XL), на self-join (Q3) и на Jaccard-агрегате (Q5). Формулировка SQL важна: без предвычисления жанров в Q4 планировщик может выбрать неудачный план. Neo4j удобнее для паттернов «игрок → друзья → игры», но OPTIONAL MATCH в Q4 и полный scan в Q5 на больших объёмах дороже эквивалентных JOIN/CTE в SQL.
 
-Итог: для отчётности, ACID и тяжёлых агрегатов — PostgreSQL; для декларативных обходов связей на умеренных объёмах — Neo4j, с осторожностью на запросах с OPTIONAL MATCH и глобальным перебором узлов.
+Итог: для отчётности, ACID и тяжёлых агрегатов — PostgreSQL; для декларативных обходов связей на умеренных объёмах — Neo4j.
 
 ---
 

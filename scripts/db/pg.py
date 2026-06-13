@@ -41,7 +41,13 @@ QUERIES = {
         LIMIT 10
     """,
     "Q4": """
-        WITH friend_owned AS (
+        WITH my_genres AS (
+            SELECT DISTINCT gg.genre_id
+            FROM ownerships o
+            JOIN game_genres gg ON gg.game_id = o.game_id
+            WHERE o.player_id = :player_id
+        ),
+        friend_owned AS (
             SELECT DISTINCT fo.player_id AS friend_id, g.game_id, g.title
             FROM friendships f
             JOIN ownerships fo ON (
@@ -60,10 +66,8 @@ QUERIES = {
                    SELECT 1
                    FROM ownerships o_sim
                    JOIN game_genres gg_sim ON gg_sim.game_id = o_sim.game_id
-                   JOIN ownerships o_mine ON o_mine.player_id = :player_id
-                   JOIN game_genres gg_mine ON gg_mine.game_id = o_mine.game_id
                    WHERE o_sim.player_id = fo.friend_id
-                     AND gg_sim.genre_id = gg_mine.genre_id
+                     AND gg_sim.genre_id IN (SELECT genre_id FROM my_genres)
                )) AS similar_friend_count
         FROM friend_owned fo
         GROUP BY fo.game_id, fo.title
