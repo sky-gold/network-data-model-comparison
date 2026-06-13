@@ -1,0 +1,15 @@
+draft/
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+scripts/results/*.json
+scripts/results/*.log
+postgres_data/
+neo4j_data/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
